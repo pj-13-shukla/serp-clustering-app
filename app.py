@@ -4,25 +4,29 @@ import openai
 import requests
 import time
 
-# Set Streamlit layout
+# Set layout
 st.set_page_config(page_title="SERP Keyword Clustering", layout="wide")
 st.title("🔍 SERP-Based Keyword Clustering Tool")
 st.markdown("Upload your keyword CSV, enter your API keys, and generate content-ready keyword clusters based on SERP overlap.")
 
-# Upload + Inputs
+# Upload & Inputs
 uploaded_file = st.file_uploader("📤 Upload your keywords.csv file", type="csv")
 serper_api = st.text_input("🔑 Serper API Key", type="password")
 openai_api = st.text_input("🔑 OpenAI API Key", type="password")
 threshold = st.slider("🛠️ SERP Similarity Threshold (%)", 10, 100, 30) / 100
 
-# Progress bar
+# Initialize session_state to persist data
+if 'final_df' not in st.session_state:
+    st.session_state.final_df = None
+
 progress_bar = st.progress(0)
 
+# Main Clustering Logic
 if st.button("🚀 Run Clustering") and uploaded_file and serper_api and openai_api:
     st.info("Processing... Please wait.")
     keywords_df = pd.read_csv(uploaded_file)
 
-    # Identify keyword column
+    # Detect correct keyword column
     column_names = [col.lower().strip() for col in keywords_df.columns]
     keyword_col = next((col for col in ['keyword', 'keywords', 'query', 'queries'] if col in column_names), None)
     keyword_col = keywords_df.columns[column_names.index(keyword_col)] if keyword_col else keywords_df.columns[0]
@@ -42,10 +46,11 @@ if st.button("🚀 Run Clustering") and uploaded_file and serper_api and openai_
         serp_data[keyword] = urls
         time.sleep(1)
 
-    # Jaccard clustering
+    # Jaccard similarity
     def jaccard(set1, set2):
         return len(set(set1) & set(set2)) / len(set(set1) | set(set2)) if set1 or set2 else 0
 
+    # Cluster keywords
     clusters = []
     unclustered = set(keywords)
     while unclustered:
@@ -58,17 +63,18 @@ if st.button("🚀 Run Clustering") and uploaded_file and serper_api and openai_
                 unclustered.remove(kw)
         clusters.append(cluster)
 
-    # GPT Labeling
+    # Label clusters with GPT-4o
     openai.api_key = openai_api
     labeled_rows = []
     for i, cluster in enumerate(clusters):
         prompt = f"""
-You are a helpful SEO assistant. Given the following keywords:
+You are a helpful SEO expert. Given this list of search intent keywords:
 
 {cluster}
 
-Return a concise, general topic label that best represents them. Avoid long phrases or duplicates.
-Respond ONLY with the label text. Do not include punctuation or explanations.
+Generate a short, generalized topic label (2-4 words) that best describes this group. Avoid repeating full keyword phrases or long-tail variants. DO NOT include words like “near me”, “best”, “top”, etc.
+
+Return ONLY the label, with no extra explanation.
 """
         try:
             res = openai.ChatCompletion.create(
@@ -87,14 +93,16 @@ Respond ONLY with the label text. Do not include punctuation or explanations.
             labeled_rows.append({
                 "Cluster Label": label,
                 "Hub": hub,
-                "Keyword": kw,
-                "URLs": "\n".join(serp_data.get(kw, []))  # Keep if needed for debugging, can be removed
+                "Keyword": kw
             })
 
-    # Final Output
+    # Final Output (no URLs)
     final_df = pd.DataFrame(labeled_rows)
+    st.session_state.final_df = final_df  # Store in session
     st.success("✅ Clustering completed!")
 
-    csv_data = final_df.to_csv(index=False, encoding="utf-8")
+# Show results if available
+if st.session_state.final_df is not None:
+    csv_data = st.session_state.final_df.to_csv(index=False, encoding="utf-8")
     st.download_button("📥 Download Clustered CSV", csv_data, file_name="final_clustered_keywords.csv", mime="text/csv")
-    st.dataframe(final_df)
+    st.dataframe(st.session_state.final_df)
