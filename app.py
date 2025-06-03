@@ -1,254 +1,143 @@
-# import streamlit as st
-# import pandas as pd
-# import openai
-# import requests
-# import time
-# import re
-
-# # Set layout
-# st.set_page_config(page_title="SERP Keyword Clustering", layout="wide")
-# st.title("🔍 SERP-Based Keyword Clustering Tool")
-# st.markdown("Upload your keyword CSV, enter your API keys, and generate content-ready keyword clusters based on SERP overlap.")
-
-# # Upload & API Inputs
-# uploaded_file = st.file_uploader("📤 Upload your keywords.csv file", type="csv")
-# serper_api = st.text_input("🔑 Serper API Key", type="password")
-# openai_api = st.text_input("🔑 OpenAI API Key", type="password")
-# threshold = st.slider("🛠️ SERP Similarity Threshold (%)", 10, 100, 30) / 100
-
-# # Initialize session state
-# if 'final_df' not in st.session_state:
-#     st.session_state.final_df = None
-
-# progress_bar = st.progress(0)
-
-# # Main logic
-# if st.button("🚀 Run Clustering") and uploaded_file and serper_api and openai_api:
-#     st.info("Processing... Please wait.")
-#     keywords_df = pd.read_csv(uploaded_file)
-
-#     # Detect keyword column
-#     column_names = [col.lower().strip() for col in keywords_df.columns]
-#     keyword_col = next((col for col in ['keyword', 'keywords', 'query', 'queries'] if col in column_names), None)
-#     keyword_col = keywords_df.columns[column_names.index(keyword_col)] if keyword_col else keywords_df.columns[0]
-
-#     keywords = keywords_df[keyword_col].dropna().unique().tolist()
-
-#     # Fetch SERP results
-#     headers = {"X-API-KEY": serper_api, "Content-Type": "application/json"}
-#     serp_data = {}
-#     for i, keyword in enumerate(keywords):
-#         progress_bar.progress((i + 1) / len(keywords))
-#         try:
-#             response = requests.post("https://google.serper.dev/search", headers=headers, json={"q": keyword})
-#             urls = [item.get("link") for item in response.json().get("organic", [])][:10]
-#         except Exception:
-#             urls = []
-#         serp_data[keyword] = urls
-#         time.sleep(1)
-
-#     # Jaccard similarity
-#     def jaccard(set1, set2):
-#         return len(set(set1) & set(set2)) / len(set(set1) | set(set2)) if set1 or set2 else 0
-
-#     # Cluster keywords
-#     clusters = []
-#     unclustered = set(keywords)
-#     while unclustered:
-#         hub = unclustered.pop()
-#         cluster = [hub]
-#         to_compare = list(unclustered)
-#         for kw in to_compare:
-#             if jaccard(serp_data[hub], serp_data[kw]) >= threshold:
-#                 cluster.append(kw)
-#                 unclustered.remove(kw)
-#         clusters.append(cluster)
-
-#     # Function to clean keywords before GPT prompt
-#     def clean_keywords_for_prompt(keywords):
-#         cleaned = []
-#         for kw in keywords:
-#             kw = kw.lower()
-#             kw = re.sub(r'\b(in|near|services|best|top|rated|local|new|ann arbor|contractors|companies|repair)\b', '', kw)
-#             kw = re.sub(r'\s+', ' ', kw).strip()
-#             cleaned.append(kw)
-#         return list(set(cleaned))
-
-#     # GPT-4o labeling
-#     openai.api_key = openai_api
-#     labeled_rows = []
-#     for i, cluster in enumerate(clusters):
-#         cleaned_keywords = clean_keywords_for_prompt(cluster)
-
-#         prompt = f"""
-# You are an SEO expert. Given these keywords:
-
-# {cleaned_keywords}
-
-# Return a short, general label (2–4 words) summarizing the **topic** of the group.
-
-# ✅ Be abstract and general  
-# ❌ Do not copy full keywords  
-# ❌ Avoid location names, company names, or “near me”, “best”, etc.  
-
-# Only return the label.
-# """
-
-#         try:
-#             res = openai.ChatCompletion.create(
-#                 model="gpt-4o",
-#                 messages=[{"role": "user", "content": prompt}],
-#                 temperature=0.3
-#             )
-#             label = res.choices[0].message["content"].strip()
-
-#             # 🔍 Debug view
-#             st.write(f"🧠 GPT label for Cluster {i+1}: `{label}`")
-
-#             # Relaxed fallback (only fallback if label is empty)
-#             if not label:
-#                 label = f"Cluster {i+1}"
-#         except Exception:
-#             label = f"Cluster {i+1}"
-
-#         hub = cluster[0]
-#         for kw in cluster:
-#             labeled_rows.append({
-#                 "Cluster Label": label,
-#                 "Hub": hub,
-#                 "Keyword": kw
-#             })
-
-#     # Create final DataFrame
-#     final_df = pd.DataFrame(labeled_rows)
-#     st.session_state.final_df = final_df
-#     st.success("✅ Clustering complete!")
-
-# # Display & download
-# if st.session_state.final_df is not None:
-#     csv_data = st.session_state.final_df.to_csv(index=False, encoding="utf-8")
-#     st.download_button("📥 Download Clustered CSV", data=csv_data, file_name="final_clustered_keywords.csv", mime="text/csv")
-
-#     display_df = st.session_state.final_df.copy()
-#     display_df["Cluster Label"] = display_df["Cluster Label"].apply(lambda x: f"**{x}**")
-#     st.markdown("### 📊 Preview of Clustered Keywords")
-#     st.dataframe(display_df, use_container_width=True)
-
-
 import streamlit as st
 import pandas as pd
-import openai  # still imported if you want to test hybrid later
+import openai
 import requests
 import time
+from sklearn.cluster import AgglomerativeClustering
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.preprocessing import normalize
+import numpy as np
 import re
-from collections import Counter
-from sklearn.feature_extraction.text import CountVectorizer
 
-# Page setup
-st.set_page_config(page_title="SERP Keyword Clustering", layout="wide")
-st.title("🔍 SERP-Based Keyword Clustering Tool")
-st.markdown("Upload your keyword CSV, enter your API key, and generate content-ready keyword clusters based on SERP overlap.")
+# -----------------------------
+# Setup & Config
+# -----------------------------
+st.set_page_config(page_title="Semantic Keyword Clustering", layout="wide")
+st.title("🧠 AI-Based Keyword Clustering Tool")
+st.markdown("Upload your keyword CSV and get semantic, search-intent-based clusters with smart labels.")
 
-# Upload & API Inputs
+# Upload CSV + API inputs
 uploaded_file = st.file_uploader("📤 Upload your keywords.csv file", type="csv")
-serper_api = st.text_input("🔑 Serper API Key", type="password")
-threshold = st.slider("🛠️ SERP Similarity Threshold (%)", 10, 100, 30) / 100
+openai_api = st.text_input("🔑 OpenAI API Key", type="password")
+threshold = st.slider("🧠 Cosine Similarity Threshold", 70, 95, 80)
 
 # Initialize session state
-if 'final_df' not in st.session_state:
+if "final_df" not in st.session_state:
     st.session_state.final_df = None
 
-progress_bar = st.progress(0)
-
-# Clean cluster keywords for label generation
-def clean_keywords(keywords):
-    cleaned = []
-    for kw in keywords:
-        kw = kw.lower()
-        kw = re.sub(r'\b(in|near|services|best|top|rated|local|new|ann arbor|contractors|companies|repair)\b', '', kw)
-        kw = re.sub(r'\s+', ' ', kw).strip()
-        cleaned.append(kw)
-    return cleaned
-
-# Extract most common 2-3 word phrase in a cluster
-def extract_top_phrase(keywords):
+# -----------------------------
+# Embedding Function
+# -----------------------------
+def get_embedding(text):
     try:
-        vectorizer = CountVectorizer(ngram_range=(2, 3), stop_words='english').fit(keywords)
-        X = vectorizer.transform(keywords)
-        word_freq = X.sum(axis=0).A1
-        vocab = vectorizer.get_feature_names_out()
-        return vocab[word_freq.argmax()] if len(vocab) > 0 else ""
-    except:
-        return ""
+        res = openai.Embedding.create(
+            model="text-embedding-3-small",
+            input=text
+        )
+        return res["data"][0]["embedding"]
+    except Exception:
+        return None
 
-# Main logic
-if st.button("🚀 Run Clustering") and uploaded_file and serper_api:
-    st.info("Processing... Please wait.")
-    keywords_df = pd.read_csv(uploaded_file)
+# -----------------------------
+# Cluster Label Generator (GPT)
+# -----------------------------
+def generate_cluster_label(keywords, api_key):
+    openai.api_key = api_key
+    prompt = f"""
+You're an SEO assistant. Given the following keywords:
+
+{keywords}
+
+Return a short, generalized 2–4 word label that describes the group. Avoid using long-tails or exact matches. Just return the label, nothing else.
+"""
+    try:
+        res = openai.ChatCompletion.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3
+        )
+        return res.choices[0].message["content"].strip()
+    except Exception:
+        return "Unlabeled Cluster"
+
+# -----------------------------
+# Main Clustering Logic
+# -----------------------------
+if st.button("🚀 Run Clustering") and uploaded_file and openai_api:
+    st.info("Generating embeddings and clustering keywords. This may take a minute...")
+    df = pd.read_csv(uploaded_file)
 
     # Detect keyword column
-    column_names = [col.lower().strip() for col in keywords_df.columns]
+    column_names = [col.lower().strip() for col in df.columns]
     keyword_col = next((col for col in ['keyword', 'keywords', 'query', 'queries'] if col in column_names), None)
-    keyword_col = keywords_df.columns[column_names.index(keyword_col)] if keyword_col else keywords_df.columns[0]
+    keyword_col = df.columns[column_names.index(keyword_col)] if keyword_col else df.columns[0]
 
-    keywords = keywords_df[keyword_col].dropna().unique().tolist()
+    keywords = df[keyword_col].dropna().unique().tolist()
 
-    # Fetch SERP results
-    headers = {"X-API-KEY": serper_api, "Content-Type": "application/json"}
-    serp_data = {}
-    for i, keyword in enumerate(keywords):
-        progress_bar.progress((i + 1) / len(keywords))
-        try:
-            response = requests.post("https://google.serper.dev/search", headers=headers, json={"q": keyword})
-            urls = [item.get("link") for item in response.json().get("organic", [])][:10]
-        except Exception:
-            urls = []
-        serp_data[keyword] = urls
-        time.sleep(1)
+    # Get embeddings
+    openai.api_key = openai_api
+    with st.spinner("Embedding keywords..."):
+        embeddings = []
+        cleaned_keywords = []
+        for kw in keywords:
+            kw_clean = kw.lower().strip()
+            embedding = get_embedding(kw_clean)
+            if embedding:
+                embeddings.append(embedding)
+                cleaned_keywords.append(kw.strip())
 
-    # Jaccard similarity
-    def jaccard(set1, set2):
-        return len(set(set1) & set(set2)) / len(set(set1) | set(set2)) if set1 or set2 else 0
+    if len(embeddings) < 2:
+        st.error("Could not generate enough embeddings to cluster. Please try again.")
+    else:
+        # Compute similarity matrix
+        similarity_matrix = cosine_similarity(embeddings)
+        norm_thresh = threshold / 100
 
-    # Cluster keywords
-    clusters = []
-    unclustered = set(keywords)
-    while unclustered:
-        hub = unclustered.pop()
-        cluster = [hub]
-        to_compare = list(unclustered)
-        for kw in to_compare:
-            if jaccard(serp_data[hub], serp_data[kw]) >= threshold:
-                cluster.append(kw)
-                unclustered.remove(kw)
-        clusters.append(cluster)
+        # Convert similarity matrix to distance matrix
+        distance_matrix = 1 - similarity_matrix
 
-    # Label clusters using CountVectorizer + fallback
-    labeled_rows = []
-    for i, cluster in enumerate(clusters):
-        cleaned_cluster = clean_keywords(cluster)
-        top_phrase = extract_top_phrase(cleaned_cluster)
-        label = top_phrase if top_phrase else cluster[0]  # fallback to hub
+        # Clustering
+        clustering = AgglomerativeClustering(
+            affinity='precomputed',
+            linkage='average',
+            distance_threshold=1 - norm_thresh,
+            n_clusters=None
+        ).fit(distance_matrix)
 
-        for kw in cluster:
-            labeled_rows.append({
-                "Cluster Label": label,
-                "Hub": cluster[0],
-                "Keyword": kw
-            })
+        cluster_labels = clustering.labels_
 
-    # Final DataFrame
-    final_df = pd.DataFrame(labeled_rows)
-    st.session_state.final_df = final_df
-    st.success("✅ Clustering complete!")
+        # Group by clusters
+        clustered_data = pd.DataFrame({
+            "Keyword": cleaned_keywords,
+            "Cluster ID": cluster_labels
+        })
 
-# Display & download
+        final_rows = []
+        for cluster_id in sorted(clustered_data["Cluster ID"].unique()):
+            cluster_keywords = clustered_data[clustered_data["Cluster ID"] == cluster_id]["Keyword"].tolist()
+            cluster_size = len(cluster_keywords)
+            hub = cluster_keywords[0]
+            label = generate_cluster_label(cluster_keywords, openai_api)
+
+            for kw in cluster_keywords:
+                final_rows.append({
+                    "Cluster Label": label.title(),
+                    "Cluster Size": cluster_size,
+                    "Hub": hub,
+                    "Keyword": kw
+                })
+
+        # Final output
+        final_df = pd.DataFrame(final_rows)
+        final_df = final_df.sort_values(by=["Cluster Size", "Cluster Label"], ascending=[False, True])
+        st.session_state.final_df = final_df
+        st.success(f"✅ Clustering complete! {len(final_df['Cluster Label'].unique())} clusters, {len(final_df)} keywords total.")
+
+# -----------------------------
+# Display Output
+# -----------------------------
 if st.session_state.final_df is not None:
     csv_data = st.session_state.final_df.to_csv(index=False, encoding="utf-8")
-    st.download_button("📥 Download Clustered CSV", data=csv_data, file_name="final_clustered_keywords.csv", mime="text/csv")
+    st.download_button("📥 Download Clustered CSV", data=csv_data, file_name="clustered_keywords.csv", mime="text/csv")
 
-    display_df = st.session_state.final_df.copy()
-    display_df["Cluster Label"] = display_df["Cluster Label"].apply(lambda x: f"**{x}**")
-    st.markdown("### 📊 Preview of Clustered Keywords")
-    st.dataframe(display_df, use_container_width=True)
-
+    st.dataframe(st.session_state.final_df, use_container_width=True)
