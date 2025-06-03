@@ -4,106 +4,85 @@ import json
 import openai
 import requests
 import time
-import re
-from collections import defaultdict
 
 st.set_page_config(page_title="SERP Keyword Clustering", layout="wide")
-
 st.title("🔍 SERP-Based Keyword Clustering Tool")
-st.markdown("Upload your keyword CSV, enter your API keys, and generate clean, content-ready keyword clusters based on SERP overlap.")
+st.markdown("Upload your keyword CSV, enter your API keys, and generate simplified keyword clusters based on SERP overlap.")
 
-# Upload keywords CSV
+# Upload CSV
 uploaded_file = st.file_uploader("📥 Upload your keywords.csv file", type="csv")
 
 # API keys
 serper_api = st.text_input("🔑 Serper API Key", type="password")
 openai_api = st.text_input("🔑 OpenAI API Key", type="password")
 
-# Similarity threshold slider
+# Similarity threshold
 threshold = st.slider("🔧 SERP Similarity Threshold (%)", min_value=10, max_value=100, value=30) / 100
 
-# Progress text
-progress_bar = st.progress(0)
-progress_text = st.empty()
+# Helper function: detect keyword column
+def detect_keyword_column(df):
+    for col in df.columns:
+        if col.strip().lower() in ["keyword", "keywords", "query", "queries"]:
+            return col
+    return df.columns[0]  # fallback to first column
 
-# Main Clustering Process
+# Clustering logic
+def jaccard(set1, set2):
+    return len(set(set1) & set(set2)) / len(set(set1) | set(set2)) if set1 or set2 else 0
+
+# Run
 if st.button("🚀 Run Clustering") and uploaded_file and serper_api and openai_api:
     st.info("Processing... Please wait.")
-    openai.api_key = openai_api
+    keywords_df = pd.read_csv(uploaded_file)
+    keyword_col = detect_keyword_column(keywords_df)
+    keywords = keywords_df[keyword_col].dropna().unique().tolist()
 
-    # Read keywords CSV
-    df = pd.read_csv(uploaded_file)
-    colname = df.columns[0]
-    keywords = df[colname].dropna().unique().tolist()
-
-    # Fetch SERP data
     headers = {"X-API-KEY": serper_api, "Content-Type": "application/json"}
     serp_data = {}
 
+    progress = st.progress(0)
     for i, kw in enumerate(keywords):
+        st.text(f"🔍 Fetching SERP for: {kw}")
         response = requests.post("https://google.serper.dev/search", headers=headers, json={"q": kw})
-        if response.status_code == 200:
-            serp_data[kw] = [r.get("link") for r in response.json().get("organic", [])[:10]]
-        else:
-            serp_data[kw] = []
-        progress_text.text(f"🔎 Fetching SERP for: {kw}")
-        progress_bar.progress((i + 1) / len(keywords))
+        urls = [r.get("link") for r in response.json().get("organic", [])][:10] if response.status_code == 200 else []
+        serp_data[kw] = urls
         time.sleep(1)
-
-    # Clustering using Jaccard
-    def jaccard(set1, set2):
-        return len(set(set1) & set(set2)) / len(set(set1) | set(set2)) if set1 or set2 else 0
+        progress.progress((i+1)/len(keywords))
 
     clusters = []
-    ungrouped = set(keywords)
-    while ungrouped:
-        hub = ungrouped.pop()
+    unclustered = set(serp_data)
+    while unclustered:
+        hub = unclustered.pop()
         cluster = [hub]
-        for other in list(ungrouped):
+        for other in list(unclustered):
             if jaccard(serp_data[hub], serp_data[other]) >= threshold:
                 cluster.append(other)
-                ungrouped.remove(other)
+                unclustered.remove(other)
         clusters.append(cluster)
 
-    # Generate cluster labels via GPT and deduplicate similar ones
-    def normalize_label(label):
-        label = label.lower()
-        label = re.sub(r'[^a-z\s]', '', label)
-        label = re.sub(r'\s+', ' ', label).strip()
-        return label
-
-    label_map = {}
-    final_rows = []
-
+    openai.api_key = openai_api
+    labeled_rows = []
     for cluster in clusters:
         hub = cluster[0]
+        prompt = f"Group the following search keywords into a single concise, high-level SEO content theme. Give a short and clean title for this group: {cluster}"
         try:
-            res = openai.ChatCompletion.create(
+            response = openai.ChatCompletion.create(
                 model="gpt-4o",
-                messages=[{"role": "user", "content": f"Generate one short, meaningful cluster name for these keywords:\n{cluster}"}],
+                messages=[{"role": "user", "content": prompt}],
                 temperature=0.3
             )
-            label = res.choices[0].message['content'].strip()
+            label = response.choices[0].message['content'].strip().replace('\n', ' ')
         except Exception:
             label = "Unnamed Cluster"
 
-        norm_label = normalize_label(label)
-        if norm_label in label_map:
-            label = label_map[norm_label]
-        else:
-            label_map[norm_label] = label
-
         for kw in cluster:
-            final_rows.append({
+            labeled_rows.append({
                 "Cluster Label": label,
                 "Hub": hub,
                 "Keyword": kw
             })
 
-    # Final Output
-    final_df = pd.DataFrame(final_rows)
+    final_df = pd.DataFrame(labeled_rows)
     st.success("✅ Clustering completed!")
+    st.download_button("📥 Download Clustered CSV", final_df.to_csv(index=False, encoding="utf-8"), file_name="final_clustered_keywords.csv", mime="text/csv")
     st.dataframe(final_df)
-
-    csv = final_df.to_csv(index=False, encoding="utf-8")
-    st.download_button("📥 Download Clustered CSV", csv, file_name="final_clustered_keywords.csv", mime="text/csv")
