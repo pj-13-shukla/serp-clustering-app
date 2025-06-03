@@ -12,3 +12,5 @@ tqdm==4.67.1
 tzdata==2025.2
 urllib3==2.4.0
 openai
+streamlit
+scikit-learn
