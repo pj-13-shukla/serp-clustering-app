@@ -3,13 +3,14 @@ import pandas as pd
 import openai
 import requests
 import time
+import re
 
-# Page setup
+# Set layout
 st.set_page_config(page_title="SERP Keyword Clustering", layout="wide")
 st.title("🔍 SERP-Based Keyword Clustering Tool")
 st.markdown("Upload your keyword CSV, enter your API keys, and generate content-ready keyword clusters based on SERP overlap.")
 
-# Upload + API Inputs
+# Upload & API Inputs
 uploaded_file = st.file_uploader("📤 Upload your keywords.csv file", type="csv")
 serper_api = st.text_input("🔑 Serper API Key", type="password")
 openai_api = st.text_input("🔑 OpenAI API Key", type="password")
@@ -21,12 +22,12 @@ if 'final_df' not in st.session_state:
 
 progress_bar = st.progress(0)
 
-# Main clustering logic
+# Main logic
 if st.button("🚀 Run Clustering") and uploaded_file and serper_api and openai_api:
     st.info("Processing... Please wait.")
     keywords_df = pd.read_csv(uploaded_file)
 
-    # Detect correct keyword column
+    # Detect keyword column
     column_names = [col.lower().strip() for col in keywords_df.columns]
     keyword_col = next((col for col in ['keyword', 'keywords', 'query', 'queries'] if col in column_names), None)
     keyword_col = keywords_df.columns[column_names.index(keyword_col)] if keyword_col else keywords_df.columns[0]
@@ -63,28 +64,48 @@ if st.button("🚀 Run Clustering") and uploaded_file and serper_api and openai_
                 unclustered.remove(kw)
         clusters.append(cluster)
 
-    # GPT-4o for labeling
+    # Function to clean keywords before GPT prompt
+    def clean_keywords_for_prompt(keywords):
+        cleaned = []
+        for kw in keywords:
+            kw = kw.lower()
+            kw = re.sub(r'\b(in|near|services|best|top|rated|local|new|ann arbor|contractors|companies|repair)\b', '', kw)
+            kw = re.sub(r'\s+', ' ', kw).strip()
+            cleaned.append(kw)
+        return list(set(cleaned))
+
+    # GPT-4o labeling
     openai.api_key = openai_api
     labeled_rows = []
     for i, cluster in enumerate(clusters):
+        cleaned_keywords = clean_keywords_for_prompt(cluster)
+
         prompt = f"""
-You are an expert in SEO and keyword categorization.
+You are a helpful SEO expert.
 
-Given this list of keywords:
-{cluster}
+Here are search-intent keywords related to a topic:
+{cleaned_keywords}
 
-Return a short, generalized label (2-4 words) that best describes the group. Avoid repeating full keywords or using long-tail terms like "near me", "best", or "top". Keep it clean and useful for content planning.
+Your task: return a **short, generalized label** (2–4 words only) describing the overall theme.
 
-Only return the label, no punctuation or explanation.
+Avoid:
+- Copying any full keyword
+- Using terms like “near me”, “best”, “top”, “services”, city names, or company names
+- Repeating the same phrase
+
+Return ONLY the label.
 """
+
         try:
             res = openai.ChatCompletion.create(
                 model="gpt-4o",
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.2
+                temperature=0.3
             )
             label = res.choices[0].message["content"].strip()
-            if not label:
+
+            # Validate label
+            if not label or any(label.lower() in kw.lower() for kw in cluster):
                 label = f"Cluster {i+1}"
         except Exception:
             label = f"Cluster {i+1}"
@@ -97,26 +118,16 @@ Only return the label, no punctuation or explanation.
                 "Keyword": kw
             })
 
-    # Final DataFrame
+    # Create final DataFrame
     final_df = pd.DataFrame(labeled_rows)
-    st.session_state.final_df = final_df  # Save for reuse
-
+    st.session_state.final_df = final_df
     st.success("✅ Clustering complete!")
 
-# Display and download section
+# Display & download
 if st.session_state.final_df is not None:
-    # Prepare download data
     csv_data = st.session_state.final_df.to_csv(index=False, encoding="utf-8")
+    st.download_button("📥 Download Clustered CSV", data=csv_data, file_name="final_clustered_keywords.csv", mime="text/csv")
 
-    # Download button
-    st.download_button(
-        label="📥 Download Clustered CSV",
-        data=csv_data,
-        file_name="final_clustered_keywords.csv",
-        mime="text/csv"
-    )
-
-    # Show clean table (bold cluster label for visual appeal)
     display_df = st.session_state.final_df.copy()
     display_df["Cluster Label"] = display_df["Cluster Label"].apply(lambda x: f"**{x}**")
     st.markdown("### 📊 Preview of Clustered Keywords")
