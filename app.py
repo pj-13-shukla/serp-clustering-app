@@ -6,83 +6,103 @@ import requests
 import time
 
 st.set_page_config(page_title="SERP Keyword Clustering", layout="wide")
+
 st.title("🔍 SERP-Based Keyword Clustering Tool")
-st.markdown("Upload your keyword CSV, enter your API keys, and generate simplified keyword clusters based on SERP overlap.")
+st.markdown("Upload your keyword CSV, enter your API keys, and generate content-ready keyword clusters based on SERP overlap.")
 
-# Upload CSV
-uploaded_file = st.file_uploader("📥 Upload your keywords.csv file", type="csv")
+# Upload CSV file
+uploaded_file = st.file_uploader("📅 Upload your keywords.csv file", type="csv")
 
-# API keys
+# API Keys
 serper_api = st.text_input("🔑 Serper API Key", type="password")
 openai_api = st.text_input("🔑 OpenAI API Key", type="password")
 
-# Similarity threshold
-threshold = st.slider("🔧 SERP Similarity Threshold (%)", min_value=10, max_value=100, value=30) / 100
+# Threshold slider
+threshold = st.slider("📊 SERP Similarity Threshold (%)", min_value=10, max_value=100, value=30) / 100
 
-# Helper function: detect keyword column
-def detect_keyword_column(df):
-    for col in df.columns:
-        if col.strip().lower() in ["keyword", "keywords", "query", "queries"]:
-            return col
-    return df.columns[0]  # fallback to first column
+# Session state
+if "final_df" not in st.session_state:
+    st.session_state.final_df = None
 
-# Clustering logic
-def jaccard(set1, set2):
-    return len(set(set1) & set(set2)) / len(set(set1) | set(set2)) if set1 or set2 else 0
-
-# Run
+# Run Clustering
 if st.button("🚀 Run Clustering") and uploaded_file and serper_api and openai_api:
     st.info("Processing... Please wait.")
-    keywords_df = pd.read_csv(uploaded_file)
-    keyword_col = detect_keyword_column(keywords_df)
-    keywords = keywords_df[keyword_col].dropna().unique().tolist()
+    openai.api_key = openai_api
+    df = pd.read_csv(uploaded_file)
 
+    # Flexible column detection
+    colnames = df.columns.str.lower().tolist()
+    keyword_col = None
+    for option in ["keyword", "query", "search term", "term"]:
+        if option in colnames:
+            keyword_col = df.columns[colnames.index(option)]
+            break
+    if keyword_col is None:
+        keyword_col = df.columns[0]
+
+    keywords = df[keyword_col].dropna().astype(str).unique().tolist()
     headers = {"X-API-KEY": serper_api, "Content-Type": "application/json"}
     serp_data = {}
 
     progress = st.progress(0)
     for i, kw in enumerate(keywords):
-        st.text(f"🔍 Fetching SERP for: {kw}")
-        response = requests.post("https://google.serper.dev/search", headers=headers, json={"q": kw})
-        urls = [r.get("link") for r in response.json().get("organic", [])][:10] if response.status_code == 200 else []
+        progress.progress((i + 1) / len(keywords), f"Fetching SERP for: {kw}")
+        try:
+            res = requests.post("https://google.serper.dev/search", headers=headers, json={"q": kw})
+            data = res.json().get("organic", [])
+            urls = [item.get("link") for item in data][:10]
+        except:
+            urls = []
         serp_data[kw] = urls
         time.sleep(1)
-        progress.progress((i+1)/len(keywords))
+
+    # Jaccard clustering
+    def jaccard(a, b):
+        return len(set(a) & set(b)) / len(set(a) | set(b)) if a or b else 0
 
     clusters = []
-    unclustered = set(serp_data)
+    unclustered = set(keywords)
     while unclustered:
         hub = unclustered.pop()
-        cluster = [hub]
-        for other in list(unclustered):
-            if jaccard(serp_data[hub], serp_data[other]) >= threshold:
-                cluster.append(other)
-                unclustered.remove(other)
-        clusters.append(cluster)
+        group = [hub]
+        for kw in list(unclustered):
+            if jaccard(serp_data[hub], serp_data[kw]) >= threshold:
+                group.append(kw)
+                unclustered.remove(kw)
+        clusters.append(group)
 
-    openai.api_key = openai_api
-    labeled_rows = []
-    for cluster in clusters:
-        hub = cluster[0]
-        prompt = f"Group the following search keywords into a single concise, high-level SEO content theme. Give a short and clean title for this group: {cluster}"
+    labeled = []
+    for group in clusters:
+        prompt = f"""
+You're an SEO expert. Given the following list of keywords:
+{group}
+
+Group them under ONE short, general cluster name that reflects their common intent.
+Avoid repetition, locations, or overly long phrases. Do not use the words 'cluster', 'near me', or any location names.
+
+Return only the concise label.
+"""
         try:
-            response = openai.ChatCompletion.create(
+            result = openai.ChatCompletion.create(
                 model="gpt-4o",
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.3
+                temperature=0.5
             )
-            label = response.choices[0].message['content'].strip().replace('\n', ' ')
-        except Exception:
-            label = "Unnamed Cluster"
+            label = result.choices[0].message['content'].strip()
+        except:
+            label = "General Topic"
 
-        for kw in cluster:
-            labeled_rows.append({
+        for kw in group:
+            labeled.append({
                 "Cluster Label": label,
-                "Hub": hub,
+                "Hub": group[0],
                 "Keyword": kw
             })
 
-    final_df = pd.DataFrame(labeled_rows)
+    st.session_state.final_df = pd.DataFrame(labeled)
     st.success("✅ Clustering completed!")
-    st.download_button("📥 Download Clustered CSV", final_df.to_csv(index=False, encoding="utf-8"), file_name="final_clustered_keywords.csv", mime="text/csv")
-    st.dataframe(final_df)
+
+# Show results and allow download
+if st.session_state.final_df is not None:
+    st.download_button("📅 Download Clustered CSV", st.session_state.final_df.to_csv(index=False, encoding="utf-8"), "final_clustered_keywords.csv", "text/csv")
+    st.dataframe(st.session_state.final_df)
