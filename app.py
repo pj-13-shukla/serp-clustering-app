@@ -81,19 +81,17 @@ if st.button("🚀 Run Clustering") and uploaded_file and serper_api and openai_
         cleaned_keywords = clean_keywords_for_prompt(cluster)
 
         prompt = f"""
-You are a helpful SEO expert.
+You are an SEO expert. Given these keywords:
 
-Here are search-intent keywords related to a topic:
 {cleaned_keywords}
 
-Your task: return a **short, generalized label** (2–4 words only) describing the overall theme.
+Return a short, general label (2–4 words) summarizing the **topic** of the group.
 
-Avoid:
-- Copying any full keyword
-- Using terms like “near me”, “best”, “top”, “services”, city names, or company names
-- Repeating the same phrase
+✅ Be abstract and general  
+❌ Do not copy full keywords  
+❌ Avoid location names, company names, or “near me”, “best”, etc.  
 
-Return ONLY the label.
+Only return the label.
 """
 
         try:
@@ -104,8 +102,11 @@ Return ONLY the label.
             )
             label = res.choices[0].message["content"].strip()
 
-            # Validate label
-            if not label or any(label.lower() in kw.lower() for kw in cluster):
+            # 🔍 Debug view
+            st.write(f"🧠 GPT label for Cluster {i+1}: `{label}`")
+
+            # Relaxed fallback (only fallback if label is empty)
+            if not label:
                 label = f"Cluster {i+1}"
         except Exception:
             label = f"Cluster {i+1}"
