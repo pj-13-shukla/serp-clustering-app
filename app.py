@@ -4,24 +4,24 @@ import openai
 import requests
 import time
 
-# Set layout
+# Page setup
 st.set_page_config(page_title="SERP Keyword Clustering", layout="wide")
 st.title("🔍 SERP-Based Keyword Clustering Tool")
 st.markdown("Upload your keyword CSV, enter your API keys, and generate content-ready keyword clusters based on SERP overlap.")
 
-# Upload & Inputs
+# Upload + API Inputs
 uploaded_file = st.file_uploader("📤 Upload your keywords.csv file", type="csv")
 serper_api = st.text_input("🔑 Serper API Key", type="password")
 openai_api = st.text_input("🔑 OpenAI API Key", type="password")
 threshold = st.slider("🛠️ SERP Similarity Threshold (%)", 10, 100, 30) / 100
 
-# Initialize session_state to persist data
+# Initialize session state
 if 'final_df' not in st.session_state:
     st.session_state.final_df = None
 
 progress_bar = st.progress(0)
 
-# Main Clustering Logic
+# Main clustering logic
 if st.button("🚀 Run Clustering") and uploaded_file and serper_api and openai_api:
     st.info("Processing... Please wait.")
     keywords_df = pd.read_csv(uploaded_file)
@@ -63,18 +63,19 @@ if st.button("🚀 Run Clustering") and uploaded_file and serper_api and openai_
                 unclustered.remove(kw)
         clusters.append(cluster)
 
-    # Label clusters with GPT-4o
+    # GPT-4o for labeling
     openai.api_key = openai_api
     labeled_rows = []
     for i, cluster in enumerate(clusters):
         prompt = f"""
-You are a helpful SEO expert. Given this list of search intent keywords:
+You are an expert in SEO and keyword categorization.
 
+Given this list of keywords:
 {cluster}
 
-Generate a short, generalized topic label (2-4 words) that best describes this group. Avoid repeating full keyword phrases or long-tail variants. DO NOT include words like “near me”, “best”, “top”, etc.
+Return a short, generalized label (2-4 words) that best describes the group. Avoid repeating full keywords or using long-tail terms like "near me", "best", or "top". Keep it clean and useful for content planning.
 
-Return ONLY the label, with no extra explanation.
+Only return the label, no punctuation or explanation.
 """
         try:
             res = openai.ChatCompletion.create(
@@ -96,13 +97,27 @@ Return ONLY the label, with no extra explanation.
                 "Keyword": kw
             })
 
-    # Final Output (no URLs)
+    # Final DataFrame
     final_df = pd.DataFrame(labeled_rows)
-    st.session_state.final_df = final_df  # Store in session
-    st.success("✅ Clustering completed!")
+    st.session_state.final_df = final_df  # Save for reuse
 
-# Show results if available
+    st.success("✅ Clustering complete!")
+
+# Display and download section
 if st.session_state.final_df is not None:
+    # Prepare download data
     csv_data = st.session_state.final_df.to_csv(index=False, encoding="utf-8")
-    st.download_button("📥 Download Clustered CSV", csv_data, file_name="final_clustered_keywords.csv", mime="text/csv")
-    st.dataframe(st.session_state.final_df)
+
+    # Download button
+    st.download_button(
+        label="📥 Download Clustered CSV",
+        data=csv_data,
+        file_name="final_clustered_keywords.csv",
+        mime="text/csv"
+    )
+
+    # Show clean table (bold cluster label for visual appeal)
+    display_df = st.session_state.final_df.copy()
+    display_df["Cluster Label"] = display_df["Cluster Label"].apply(lambda x: f"**{x}**")
+    st.markdown("### 📊 Preview of Clustered Keywords")
+    st.dataframe(display_df, use_container_width=True)
