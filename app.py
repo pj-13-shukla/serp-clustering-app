@@ -5,7 +5,7 @@ import requests
 import time
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.preprocessing import normalize
+from sklearn.feature_extraction.text import CountVectorizer
 import numpy as np
 import re
 
@@ -39,26 +39,21 @@ def get_embedding(text):
         return None
 
 # -----------------------------
-# Cluster Label Generator (GPT)
+# Label Refinement (N-gram)
 # -----------------------------
-def generate_cluster_label(keywords, api_key):
-    openai.api_key = api_key
-    prompt = f"""
-You're an SEO assistant. Given the following keywords:
-
-{keywords}
-
-Return a short, generalized 2–4 word label that describes the group. Avoid using long-tails or exact matches. Just return the label, nothing else.
-"""
+def extract_label_from_cluster(keywords):
+    cleaned = [re.sub(r"[^a-zA-Z0-9\s]", "", kw.lower()) for kw in keywords]
     try:
-        res = openai.ChatCompletion.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3
-        )
-        return res.choices[0].message["content"].strip()
+        vectorizer = CountVectorizer(ngram_range=(2, 4), stop_words='english').fit(cleaned)
+        X = vectorizer.transform(cleaned)
+        vocab = vectorizer.get_feature_names_out()
+        freqs = X.sum(axis=0).A1
+        if len(vocab) == 0:
+            return max(keywords, key=len)
+        best = vocab[np.argmax(freqs)]
+        return best
     except Exception:
-        return "Unlabeled Cluster"
+        return max(keywords, key=len)
 
 # -----------------------------
 # Main Clustering Logic
@@ -117,11 +112,18 @@ if st.button("🚀 Run Clustering") and uploaded_file and openai_api:
             cluster_keywords = clustered_data[clustered_data["Cluster ID"] == cluster_id]["Keyword"].tolist()
             cluster_size = len(cluster_keywords)
             hub = cluster_keywords[0]
-            label = generate_cluster_label(cluster_keywords, openai_api)
+            label = extract_label_from_cluster(cluster_keywords)
+
+            # Capitalize acronyms
+            if any(acr in label.upper() for acr in ['THC', 'THCA', 'CBD']):
+                label = label.upper()
+            else:
+                label = label.title()
 
             for kw in cluster_keywords:
                 final_rows.append({
-                    "Cluster Label": label.title(),
+                    "Cluster #": f"Cluster {cluster_id + 1}",
+                    "Cluster Label": label,
                     "Cluster Size": cluster_size,
                     "Hub": hub,
                     "Keyword": kw
