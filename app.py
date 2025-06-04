@@ -16,11 +16,10 @@ st.markdown("Upload your keyword CSV and get semantic, search-intent-based clust
 uploaded_file = st.file_uploader("Upload your keywords.csv file", type="csv")
 openai_api_key = st.text_input("OpenAI API Key", type="password")
 sim_threshold = st.slider("Cosine Similarity Threshold", min_value=70, max_value=95, value=80)
-
 progress_text = st.empty()
 
 # --------------------
-# Helpers
+# Helper Functions
 # --------------------
 def get_embedding(text, client):
     try:
@@ -101,6 +100,7 @@ if st.button("Run Clustering") and uploaded_file and openai_api_key:
                     })
 
             final_df = pd.DataFrame(results).sort_values(by=["Topic Cluster", "Keyword"])
+            st.session_state.final_df = final_df
 
             csv = final_df.to_csv(index=False, encoding="utf-8")
             st.download_button("Download Clustered CSV", data=csv, file_name="clustered_keywords.csv", mime="text/csv")
@@ -114,6 +114,6 @@ if st.button("Run Clustering") and uploaded_file and openai_api_key:
 # -----------------------------
 if st.session_state.get("final_df") is not None:
     csv_data = st.session_state.final_df.to_csv(index=False, encoding="utf-8")
-    st.download_button("📥 Download Clustered CSV", data=csv_data, file_name="clustered_keywords.csv", mime="text/csv")
-    st.markdown("### 🔍 Final Clustered Output")
+    st.download_button("\ud83d\udcc4 Download Clustered CSV", data=csv_data, file_name="clustered_keywords.csv", mime="text/csv")
+    st.markdown("### \ud83d\udd0d Final Clustered Output")
     st.dataframe(st.session_state.final_df, use_container_width=True)
