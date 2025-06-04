@@ -10,7 +10,7 @@ from sklearn.cluster import AgglomerativeClustering
 # Streamlit UI
 # --------------------
 st.set_page_config(page_title="AI-Based Keyword Clustering Tool", layout="wide")
-st.title("🧠 AI-Based Keyword Clustering Tool")
+st.title("AI-Based Keyword Clustering Tool")
 st.markdown("Upload your keyword CSV and get semantic, search-intent-based clusters with smart labels.")
 
 uploaded_file = st.file_uploader("Upload your keywords.csv file", type="csv")
@@ -102,6 +102,7 @@ if st.button("Run Clustering") and uploaded_file and openai_api_key:
             final_df = pd.DataFrame(results).sort_values(by=["Topic Cluster", "Keyword"])
             st.session_state.final_df = final_df
 
+            st.success("✅ Clustering complete!")
             csv = final_df.to_csv(index=False, encoding="utf-8")
             st.download_button("Download Clustered CSV", data=csv, file_name="clustered_keywords.csv", mime="text/csv")
             st.dataframe(final_df, use_container_width=True)
@@ -110,10 +111,10 @@ if st.button("Run Clustering") and uploaded_file and openai_api_key:
         st.error(f"Something went wrong during clustering: {e}")
 
 # -----------------------------
-# Display Output
+# Display Output If Available
 # -----------------------------
 if st.session_state.get("final_df") is not None:
     csv_data = st.session_state.final_df.to_csv(index=False, encoding="utf-8")
-    st.download_button("\ud83d\udcc4 Download Clustered CSV", data=csv_data, file_name="clustered_keywords.csv", mime="text/csv")
-    st.markdown("### \ud83d\udd0d Final Clustered Output")
+    st.download_button("Download Clustered CSV", data=csv_data, file_name="clustered_keywords.csv", mime="text/csv")
+    st.markdown("### Final Clustered Output")
     st.dataframe(st.session_state.final_df, use_container_width=True)
