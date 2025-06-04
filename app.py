@@ -108,3 +108,12 @@ if st.button("Run Clustering") and uploaded_file and openai_api_key:
 
     except Exception as e:
         st.error(f"Something went wrong during clustering: {e}")
+
+# -----------------------------
+# Display Output
+# -----------------------------
+if st.session_state.get("final_df") is not None:
+    csv_data = st.session_state.final_df.to_csv(index=False, encoding="utf-8")
+    st.download_button("📥 Download Clustered CSV", data=csv_data, file_name="clustered_keywords.csv", mime="text/csv")
+    st.markdown("### 🔍 Final Clustered Output")
+    st.dataframe(st.session_state.final_df, use_container_width=True)
