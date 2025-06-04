@@ -1,111 +1,105 @@
 import streamlit as st
 import pandas as pd
 import openai
-import numpy as np
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.metrics.pairwise import cosine_similarity
-import time
+import numpy as np
 
-# -----------------------------
-# Streamlit App Config
-# -----------------------------
-st.set_page_config(page_title="Semantic Keyword Clustering", layout="wide")
+# ----------------------------
+# Setup
+# ----------------------------
+st.set_page_config(page_title="AI-Based Keyword Clustering Tool", layout="wide")
 st.title("🧠 AI-Based Keyword Clustering Tool")
 st.markdown("Upload your keyword CSV and get semantic, search-intent-based clusters with smart labels.")
 
 uploaded_file = st.file_uploader("📄 Upload your keywords.csv file", type="csv")
-openai_api_key = st.text_input("🔑 Enter your OpenAI API Key", type="password")
-similarity_threshold = st.slider("🔍 Cosine Similarity Threshold", 70, 95, 80)
+openai_api_key = st.text_input("🔑 OpenAI API Key", type="password")
+threshold = st.slider("📏 Cosine Similarity Threshold", 70, 95, 80)
 
-# -----------------------------
-# Helper Functions
-# -----------------------------
-def get_embedding(text, api_key):
+# ----------------------------
+# OpenAI Clients
+# ----------------------------
+client = openai.OpenAI(api_key=openai_api_key)
+
+def get_embedding(text):
     try:
-        client = openai.OpenAI(api_key=api_key)
-        response = client.embeddings.create(
-            input=text,
-            model="text-embedding-3-small"
-        )
-        return response.data[0].embedding
-    except Exception as e:
-        st.error(f"Embedding error for '{text}': {e}")
+        res = client.embeddings.create(model="text-embedding-3-small", input=text)
+        return res.data[0].embedding
+    except:
         return None
 
-def generate_cluster_label(keywords, api_key):
+def generate_label(keywords):
     prompt = f"""
-You're an SEO assistant. Given the following keywords:
+You are an SEO assistant. Given the following keywords:
 
 {keywords}
 
-Return a short, capitalized 2–4 word label that describes the group. Avoid exact matches. Use clear and generalized wording. For example:
-- For ['how to clean a bowl', 'cleaning bong bowls'], use "Bowl Cleaning"
-- For ['thca to thc', 'convert thca'], use "THCA Conversion"
+Return a short, generalized 2–4 word label that describes the group. Avoid using long-tails or exact matches. Use proper casing (like "THCA Conversion" or "Bong Size") and avoid duplicates.
+Only return the label — no intro, no explanation.
 """
     try:
-        client = openai.OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model="gpt-4o",
+        res = client.chat.completions.create(
+            model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3
         )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        st.error(f"Labeling error: {e}")
+        return res.choices[0].message.content.strip().title()
+    except:
         return "Unlabeled Cluster"
 
-# -----------------------------
-# Clustering Process
-# -----------------------------
+# ----------------------------
+# Main Clustering
+# ----------------------------
 if st.button("🚀 Run Clustering") and uploaded_file and openai_api_key:
     df = pd.read_csv(uploaded_file)
-    keyword_column = df.columns[0]
-    keywords = df[keyword_column].dropna().unique().tolist()
+    colnames = [col.lower().strip() for col in df.columns]
+    keyword_col = next((col for col in ['keyword', 'keywords', 'query', 'queries'] if col in colnames), None)
+    keyword_col = df.columns[colnames.index(keyword_col)] if keyword_col else df.columns[0]
 
-    st.info("🔄 Generating embeddings, please wait...")
-    embeddings = []
-    valid_keywords = []
-    for kw in keywords:
-        embedding = get_embedding(kw, openai_api_key)
-        if embedding:
-            embeddings.append(embedding)
-            valid_keywords.append(kw)
-        time.sleep(0.2)
+    raw_keywords = df[keyword_col].dropna().unique().tolist()
 
-    if len(embeddings) < 2:
-        st.error("❌ Not enough valid embeddings to proceed.")
+    with st.spinner("🔍 Generating embeddings..."):
+        keywords = []
+        vectors = []
+        for kw in raw_keywords:
+            emb = get_embedding(kw.lower().strip())
+            if emb:
+                keywords.append(kw.strip())
+                vectors.append(emb)
+
+    if len(keywords) < 2:
+        st.error("❌ Could not generate enough embeddings. Try again.")
     else:
-        sim_matrix = cosine_similarity(embeddings)
-        dist_matrix = 1 - sim_matrix
+        similarity = cosine_similarity(vectors)
+        dist = 1 - similarity
+
         clustering = AgglomerativeClustering(
             affinity='precomputed',
             linkage='average',
-            distance_threshold=1 - (similarity_threshold / 100),
+            distance_threshold=1 - (threshold / 100),
             n_clusters=None
-        )
-        cluster_ids = clustering.fit_predict(dist_matrix)
+        ).fit(dist)
 
-        clustered_df = pd.DataFrame({
-            "Keyword": valid_keywords,
-            "Cluster ID": cluster_ids
-        })
+        labels = clustering.labels_
+        result_df = pd.DataFrame({"Keyword": keywords, "Cluster ID": labels})
 
-        output_rows = []
-        for cid in sorted(clustered_df["Cluster ID"].unique()):
-            group = clustered_df[clustered_df["Cluster ID"] == cid]
-            kws = group["Keyword"].tolist()
-            label = generate_cluster_label(kws, openai_api_key)
-            for kw in kws:
-                output_rows.append({
+        final_rows = []
+        for cid in sorted(result_df["Cluster ID"].unique()):
+            cluster_keywords = result_df[result_df["Cluster ID"] == cid]["Keyword"].tolist()
+            cluster_size = len(cluster_keywords)
+            label = generate_label(cluster_keywords)
+
+            for kw in cluster_keywords:
+                final_rows.append({
                     "Topic Cluster": label,
-                    "Cluster Size": len(kws),
+                    "Cluster Size": cluster_size,
                     "Keyword": kw
                 })
 
-        final_output = pd.DataFrame(output_rows)
-        final_output = final_output.sort_values(by=["Topic Cluster", "Keyword"]).reset_index(drop=True)
+        final_df = pd.DataFrame(final_rows)
+        final_df = final_df.sort_values(by=["Topic Cluster", "Keyword"])
+        csv = final_df.to_csv(index=False)
 
-        csv = final_output.to_csv(index=False).encode("utf-8")
-        st.success(f"✅ Done! {len(final_output)} keywords clustered into {final_output['Topic Cluster'].nunique()} clusters.")
-        st.download_button("📥 Download Result CSV", csv, "final_clustered_keywords.csv", "text/csv")
-        st.dataframe(final_output, use_container_width=True)
+        st.success(f"✅ Done! {final_df['Topic Cluster'].nunique()} clusters found.")
+        st.download_button("📥 Download Clustered Keywords CSV", data=csv, file_name="clustered_keywords.csv", mime="text/csv")
+        st.dataframe(final_df, use_container_width=True)
