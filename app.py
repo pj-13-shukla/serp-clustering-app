@@ -5,12 +5,13 @@ import time
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.cluster import AgglomerativeClustering
+from collections import Counter
 
 # --------------------
 # Streamlit UI
 # --------------------
 st.set_page_config(page_title="AI-Based Keyword Clustering Tool", layout="wide")
-st.title("AI-Based Keyword Clustering Tool")
+st.title("\U0001F9E0 AI-Based Keyword Clustering Tool")
 st.markdown("Upload your keyword CSV and get semantic, search-intent-based clusters with smart labels.")
 
 uploaded_file = st.file_uploader("Upload your keywords.csv file", type="csv")
@@ -34,9 +35,15 @@ def get_embedding(text, client):
 
 def generate_label(keywords, client):
     prompt = f"""
-You're an SEO assistant. Given the following keywords:
+You're an SEO assistant. Group these keywords under a single topic cluster:
+
 {keywords}
-Return a short, generalized 2–4 word label that describes the group. Avoid long-tails or exact matches. Just return the label, nothing else.
+
+Return only a short, 2–4 word label that describes their common intent. Use simple wording and avoid duplicates or long-tail phrases.
+Examples: 
+- ['14mm bowl vs 18mm', '14 vs 18mm bowl'] => Bowl Size Comparison
+- ['bong size guide', 'bong sizes'] => Bong Sizes
+Just return the label, nothing else.
 """
     try:
         res = client.chat.completions.create(
@@ -88,33 +95,29 @@ if st.button("Run Clustering") and uploaded_file and openai_api_key:
             labels = clustering.labels_
             df_clustered = pd.DataFrame({"Keyword": valid_keywords, "Cluster": labels})
 
-            results = []
+            temp_results = []
             for cluster_id in sorted(df_clustered["Cluster"].unique()):
                 kws = df_clustered[df_clustered["Cluster"] == cluster_id]["Keyword"].tolist()
                 label = generate_label(kws, client)
                 for kw in kws:
-                    results.append({
+                    temp_results.append({
                         "Topic Cluster": label,
-                        "Cluster Size": len(kws),
                         "Keyword": kw
                     })
 
-            final_df = pd.DataFrame(results).sort_values(by=["Topic Cluster", "Keyword"])
+            # Compute final cluster sizes after label assignment
+            cluster_sizes = Counter([row["Topic Cluster"] for row in temp_results])
+            final_rows = [
+                {**row, "Cluster Size": cluster_sizes[row["Topic Cluster"]]} for row in temp_results
+            ]
+
+            final_df = pd.DataFrame(final_rows).sort_values(by=["Topic Cluster", "Keyword"])
             st.session_state.final_df = final_df
 
-            st.success("✅ Clustering complete!")
             csv = final_df.to_csv(index=False, encoding="utf-8")
             st.download_button("Download Clustered CSV", data=csv, file_name="clustered_keywords.csv", mime="text/csv")
+            st.markdown("### \U0001F50D Final Clustered Output")
             st.dataframe(final_df, use_container_width=True)
 
     except Exception as e:
         st.error(f"Something went wrong during clustering: {e}")
-
-# -----------------------------
-# Display Output If Available
-# -----------------------------
-if st.session_state.get("final_df") is not None:
-    csv_data = st.session_state.final_df.to_csv(index=False, encoding="utf-8")
-    st.download_button("Download Clustered CSV", data=csv_data, file_name="clustered_keywords.csv", mime="text/csv")
-    st.markdown("### Final Clustered Output")
-    st.dataframe(st.session_state.final_df, use_container_width=True)
