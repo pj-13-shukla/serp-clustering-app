@@ -3,7 +3,6 @@ import pandas as pd
 import openai
 import time
 import numpy as np
-import re
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.cluster import AgglomerativeClustering
 
@@ -16,15 +15,13 @@ st.markdown("Upload your keyword CSV and get semantic, search-intent-based clust
 
 uploaded_file = st.file_uploader("Upload your keywords.csv file", type="csv")
 openai_api_key = st.text_input("OpenAI API Key", type="password")
-sim_threshold = st.slider("Cosine Similarity Threshold", min_value=70, max_value=95, value=78)
+sim_threshold = st.slider("Cosine Similarity Threshold", min_value=70, max_value=95, value=80)
 progress_text = st.empty()
+progress_bar = st.progress(0)
 
 # --------------------
 # Helper Functions
 # --------------------
-def normalize_keyword(text):
-    return re.sub(r"[^a-zA-Z0-9 ]", "", text.lower().strip())
-
 def get_embedding(text, client):
     try:
         response = client.embeddings.create(
@@ -63,10 +60,7 @@ if st.button("Run Clustering") and uploaded_file and openai_api_key:
         column_names = [col.lower().strip() for col in df.columns]
         keyword_col = next((col for col in ['keyword', 'keywords', 'query', 'queries'] if col in column_names), df.columns[0])
         keyword_col = df.columns[column_names.index(keyword_col)]
-        raw_keywords = df[keyword_col].dropna().unique().tolist()
-
-        # Normalize keywords for better clustering
-        keywords = [normalize_keyword(kw) for kw in raw_keywords]
+        keywords = df[keyword_col].dropna().unique().tolist()
 
         client = openai.OpenAI(api_key=openai_api_key)
 
@@ -77,52 +71,55 @@ if st.button("Run Clustering") and uploaded_file and openai_api_key:
             emb = get_embedding(kw, client)
             if emb:
                 embeddings.append(emb)
-                valid_keywords.append(raw_keywords[i])  # Use original keyword for display
+                valid_keywords.append(kw)
+            progress_bar.progress((i + 1) / len(keywords))
             time.sleep(0.5)
 
         if len(embeddings) < 2:
-            st.error("Could not generate enough embeddings to cluster. Please try again.")
-        else:
-            similarity = cosine_similarity(embeddings)
-            distance = 1 - similarity
-            clustering = AgglomerativeClustering(
-                metric='precomputed',
-                linkage='average',
-                distance_threshold=1 - (sim_threshold / 100),
-                n_clusters=None
-            ).fit(distance)
+            st.error("❌ Not enough valid embeddings were generated to proceed with clustering.")
+            st.stop()
 
-            labels = clustering.labels_
-            df_clustered = pd.DataFrame({"Keyword": valid_keywords, "Cluster": labels})
+        st.success("✅ All embeddings generated. Proceeding to cluster...")
 
-            results = []
-            for cluster_id in sorted(df_clustered["Cluster"].unique()):
-                kws = df_clustered[df_clustered["Cluster"] == cluster_id]["Keyword"].tolist()
-                label = generate_label(kws, client)
-                cluster_size = len(kws)
-                for kw in kws:
-                    results.append({
-                        "Topic Cluster": label,
-                        "Cluster Size": cluster_size,
-                        "Keyword": kw
-                    })
+        similarity = cosine_similarity(embeddings)
+        distance = 1 - similarity
 
-            final_df = pd.DataFrame(results).sort_values(by=["Topic Cluster", "Keyword"])
-            st.session_state.final_df = final_df
+        clustering = AgglomerativeClustering(
+            metric='precomputed',
+            linkage='average',
+            distance_threshold=1 - (sim_threshold / 100),
+            n_clusters=None
+        ).fit(distance)
 
-            csv = final_df.to_csv(index=False, encoding="utf-8")
-            st.success("\u2705 Clustering complete!")
-            st.download_button("Download Clustered CSV", data=csv, file_name="clustered_keywords.csv", mime="text/csv", key="final_csv_dl")
-            st.dataframe(final_df, use_container_width=True)
+        labels = clustering.labels_
+        df_clustered = pd.DataFrame({"Keyword": valid_keywords, "Cluster": labels})
+
+        results = []
+        total_clusters = df_clustered["Cluster"].nunique()
+
+        for cluster_id in sorted(df_clustered["Cluster"].unique()):
+            kws = df_clustered[df_clustered["Cluster"] == cluster_id]["Keyword"].tolist()
+            label = generate_label(kws, client)
+            for kw in kws:
+                results.append({
+                    "Topic Cluster": label,
+                    "Cluster Size": len(kws),
+                    "Keyword": kw
+                })
+
+        final_df = pd.DataFrame(results).sort_values(by=["Topic Cluster", "Keyword"])
+
+        if final_df.empty:
+            st.warning("⚠️ Clustering completed but no meaningful clusters were formed. Try reducing the similarity threshold.")
+            st.stop()
+
+        percent_clustered = round((len(final_df) / len(keywords)) * 100, 2)
+        st.success(f"✅ Clustering complete! {percent_clustered}% of keywords clustered.")
+
+        csv = final_df.to_csv(index=False, encoding="utf-8")
+        st.download_button("Download Clustered CSV", data=csv, file_name="clustered_keywords.csv", mime="text/csv", key="download_csv")
+        st.markdown("### 🔍 Final Clustered Output")
+        st.dataframe(final_df, use_container_width=True)
 
     except Exception as e:
         st.error(f"Something went wrong during clustering: {e}")
-
-# -----------------------------
-# Display Output (Avoid Duplicates)
-# -----------------------------
-if st.session_state.get("final_df") is not None:
-    csv_data = st.session_state.final_df.to_csv(index=False, encoding="utf-8")
-    st.download_button("Download Clustered CSV", data=csv_data, file_name="clustered_keywords.csv", mime="text/csv", key="final_csv_dl_bottom")
-    st.markdown("### \U0001F50D Final Clustered Output")
-    st.dataframe(st.session_state.final_df, use_container_width=True)
